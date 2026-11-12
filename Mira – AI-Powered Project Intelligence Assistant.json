@@ -1,0 +1,776 @@
+{
+  "name": "Mira – AI-Powered Project Intelligence Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "d6098393-3eca-4748-a6cc-0345f235dd48",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2080,
+        1104
+      ],
+      "webhookId": "f9a31499-c56f-4a71-8d43-459656ae0437"
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/rampy86/mira-capstone/main/data/project_description.txt",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "abce4f93-f437-4956-ab9e-d12f77de48dd",
+      "name": "Get Description",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1856,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/rampy86/mira-capstone/main/data/project_timeline.csv",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "5a58327f-51cd-4a89-9d79-537a68123791",
+      "name": "Get Timeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1632,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/rampy86/mira-capstone/main/data/project_risks.csv",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "08dd79cb-3f70-4a7b-b2ca-967905e05df1",
+      "name": "Get Risks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1408,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/rampy86/mira-capstone/main/data/sample_task_board.csv",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "d51a2a0c-4a1c-447b-b637-b2b4876e327e",
+      "name": "Get Task Board",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1184,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== Mira: Compute Facts (n8n Code node, \"Run Once for All Items\") =====\n// Change these two dates only if you choose different assumptions.\nconst PROJECT_START = '2026-03-30'; // Monday of Week 1\nconst AS_OF = '2026-04-27';         // Mira's \"today\" (Week 5, Sprint 3)\n\n// --- small CSV parser (handles quoted fields with commas) ---\nfunction parseCSV(text) {\n  const rows = []; let row = [], field = '', q = false;\n  text = String(text).replace(/\\r/g, '');\n  for (let i = 0; i < text.length; i++) {\n    const c = text[i];\n    if (q) {\n      if (c === '\"' && text[i + 1] === '\"') { field += '\"'; i++; }\n      else if (c === '\"') q = false;\n      else field += c;\n    } else if (c === '\"') q = true;\n    else if (c === ',') { row.push(field); field = ''; }\n    else if (c === '\\n') { row.push(field); rows.push(row); row = []; field = ''; }\n    else field += c;\n  }\n  if (field !== '' || row.length) { row.push(field); rows.push(row); }\n  const head = rows.shift().map(h => h.trim());\n  return rows.filter(r => r.some(v => v.trim() !== ''))\n    .map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] || '').trim()])));\n}\n\nconst day = 86400000;\nconst toDate = s => new Date(s + 'T00:00:00Z');\nconst iso = d => d.toISOString().slice(0, 10);\nconst addDays = (s, n) => iso(new Date(toDate(s).getTime() + n * day));\nconst diffDays = (a, b) => Math.round((toDate(a) - toDate(b)) / day); // a - b\n\n// --- read the four HTTP Request nodes (Response Format = Text) ---\nconst description = $('Get Description').first().json.data;\nconst timeline = parseCSV($('Get Timeline').first().json.data);\nconst risks = parseCSV($('Get Risks').first().json.data);\nconst tasks = parseCSV($('Get Task Board').first().json.data);\n\n// --- task counts ---\nconst statuses = ['Done', 'In Progress', 'Blocked', 'To Do'];\nconst counts = Object.fromEntries(statuses.map(s => [s, tasks.filter(t => t.status === s).length]));\ncounts.Total = tasks.length;\n\nconst slim = t => ({ id: t.task_id, name: t.task_name, status: t.status, assignee: t.assignee,\n  priority: t.priority, sprint: t.sprint, due: t.due_date, label: t.labels, description: t.description });\n\nconst open = tasks.filter(t => t.status !== 'Done');\nconst blocked = open.filter(t => t.status === 'Blocked').map(slim);\nconst overdue = open.filter(t => t.due_date < AS_OF)\n  .map(t => ({ ...slim(t), days_overdue: diffDays(AS_OF, t.due_date) }));\nconst dueNext7 = open.filter(t => t.due_date >= AS_OF && t.due_date <= addDays(AS_OF, 7))\n  .map(t => ({ ...slim(t), days_left: diffDays(t.due_date, AS_OF) }));\n\n// --- tasks by sprint ---\nconst bySprint = {};\nfor (const t of tasks) (bySprint[t.sprint] = bySprint[t.sprint] || []).push(slim(t));\n\n// --- phases with real dates (Week n starts PROJECT_START + 7*(n-1)) ---\nconst phases = timeline.map(p => {\n  const start = addDays(PROJECT_START, 7 * (Number(p.start_week) - 1));\n  const end = addDays(PROJECT_START, 7 * Number(p.end_week) - 1);\n  const phaseTasks = tasks.filter(t => t.due_date >= start && t.due_date <= end);\n  const state = end < AS_OF ? 'ended' : (start <= AS_OF ? 'current' : 'future');\n  return {\n    phase: Number(p.phase), name: p.phase_name, weeks: `${p.start_week}-${p.end_week}`,\n    start, end, state, key_activities: p.key_activities, milestones: p.milestones_deliverables,\n    tasks_due_in_phase: phaseTasks.map(t => `${t.task_id} ${t.task_name} (${t.status})`),\n    unfinished_tasks: phaseTasks.filter(t => t.status !== 'Done').map(t => t.task_id)\n  };\n});\nconst horizon = addDays(AS_OF, 14);\nconst upcomingMilestones = phases.filter(p => p.end >= AS_OF && p.end <= horizon);\nconst lateMilestones = phases.filter(p => p.state === 'ended' && p.unfinished_tasks.length);\n\n// --- board vs timeline mismatch (board finishes earlier than plan) ---\nconst lastTaskDue = tasks.map(t => t.due_date).sort().at(-1);\nconst planEnd = phases.at(-1).end;\n\nreturn [{ json: {\n  as_of: AS_OF, project_start: PROJECT_START, description,\n  counts, blocked, overdue, due_next_7_days: dueNext7, tasks_by_sprint: bySprint,\n  all_tasks: tasks.map(slim), phases, upcoming_milestones_14_days: upcomingMilestones,\n  late_milestones: lateMilestones, risks,\n  schedule_check: { last_task_due: lastTaskDue, timeline_end: planEnd,\n    note: `Task board ends ${lastTaskDue}; timeline ends ${planEnd}.` }\n} }];\n"
+      },
+      "id": "e774da20-a5bf-461c-9b92-5a4fd079b501",
+      "name": "Compute Facts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('When chat message received').first().json.chatInput }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Router for Mira, a project intelligence assistant for the ABCDE Ltd. AI Adoption Project. Your single job is to classify the user's request.\n\nINPUT: One user request in plain text.\n\nOUTPUT: Return EXACTLY one JSON object, with no other text and no code fences:\n{\"intent\": \"<plan | risk | status | tracking | stakeholder_update | other>\", \"use_project_files\": <true | false>, \"sprint\": <number or null>, \"reason\": \"<one short sentence>\"}\n\nIntent definitions:\n- plan: create a project plan, phases, schedule or timeline\n- risk: a risk assessment, risk matrix, or the top/biggest risks\n- status: a status report, progress summary, or counts of tasks by status\n- tracking: which tasks are blocked, late or at risk, or which milestones are coming up\n- stakeholder_update: an email or update for stakeholders, leadership, engineering or a client\n- other: anything else\n\nRULES:\n1. use_project_files = true when the request is about the ABCDE Ltd. project, its task board, timeline, risk data, a sprint, or \"the project\" / \"current project\" without describing a different project.\n2. use_project_files = false when the request supplies its own project in the text (for example after \"for:\"), names a project without details (\"a new project\", \"a 2-week project\", \"a chatbot\"), or gives no data (\"things are going fine\"). Those requests are NOT about ABCDE Ltd.\n3. sprint = the sprint number only if the request names one; otherwise null. Do NOT guess a sprint.\n4. Do NOT answer the request itself. Only classify it.\n\nVAGUE INPUT RULE: If you cannot tell which intent applies, return \"intent\": \"other\" and explain why in \"reason\".\n\nExamples (wording differs from the test set on purpose):\n\"Give me a status report for Sprint 1.\" -> {\"intent\":\"status\",\"use_project_files\":true,\"sprint\":1,\"reason\":\"Status report for a named sprint of the project board\"}\n\"Draft a project plan for: 'Launch a mobile app next quarter.'\" -> {\"intent\":\"plan\",\"use_project_files\":false,\"sprint\":null,\"reason\":\"User describes a different project in one line\"}\n\"Is anything overdue this week?\" -> {\"intent\":\"tracking\",\"use_project_files\":true,\"sprint\":null,\"reason\":\"Checks task due dates on the project board\"}\n"
+        }
+      },
+      "id": "53226ad3-5873-40f9-b8c8-383fefa15d6a",
+      "name": "Router",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -736,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai:gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "openai:gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "772848fa-a9a0-4341-a0e8-7677046875d3",
+      "name": "Router Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -672,
+        1344
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "yhv0sTFhz2GqTQZk",
+          "name": "OpenAI account 2 for mira-router"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== Mira: Parse Route (n8n Code node, \"Run Once for All Items\") =====\n// Reads the Router's JSON, then builds a small, scoped context for ONE agent.\nconst request = $('When chat message received').first().json.chatInput;\nconst f = $('Compute Facts').first().json;\n\n// 1) Parse the Router output safely (strip ```json fences if present)\nlet raw = $input.first().json.text ?? $input.first().json.output ?? '';\nraw = String(raw).replace(/```json|```/g, '').trim();\nlet route;\ntry { route = JSON.parse(raw); }\ncatch (e) { route = { intent: 'other', use_project_files: false, sprint: null, reason: 'Router output was not valid JSON' }; }\n\nconst intents = ['plan', 'risk', 'status', 'tracking', 'stakeholder_update', 'other'];\nif (!intents.includes(route.intent)) route.intent = 'other';\nconst useFiles = route.use_project_files === true;\n\n// 2) Build the context each agent is allowed to see\nlet context;\nif (!useFiles) {\n  context = { note: 'NO PROJECT FILES PROVIDED. Use only the text in the user request.' };\n} else if (route.intent === 'plan') {\n  context = { as_of: f.as_of, project_description: f.description,\n    phases: f.phases.map(p => ({ phase: p.phase, name: p.name, weeks: p.weeks, start: p.start, end: p.end,\n      key_activities: p.key_activities, milestones: p.milestones })) };\n} else if (route.intent === 'risk') {\n  context = { as_of: f.as_of, project_description: f.description, risk_register: f.risks,\n    task_evidence: { blocked: f.blocked, overdue: f.overdue, due_next_7_days: f.due_next_7_days } };\n} else if (route.intent === 'status') {\n  const sprintKey = route.sprint ? `Sprint ${route.sprint}` : null;\n  context = { as_of: f.as_of, counts_all_tasks: f.counts,\n    sprint: sprintKey, sprint_tasks: sprintKey ? (f.tasks_by_sprint[sprintKey] || []) : null,\n    blocked: f.blocked, overdue: f.overdue, due_next_7_days: f.due_next_7_days,\n    upcoming_milestones_14_days: f.upcoming_milestones_14_days, late_milestones: f.late_milestones };\n} else if (route.intent === 'tracking') {\n  context = { as_of: f.as_of, blocked: f.blocked, overdue: f.overdue, due_next_7_days: f.due_next_7_days,\n    upcoming_milestones_14_days: f.upcoming_milestones_14_days, late_milestones: f.late_milestones,\n    schedule_check: f.schedule_check };\n} else if (route.intent === 'stakeholder_update') {\n  const sprintKey = route.sprint ? `Sprint ${route.sprint}` : null;\n  const st = sprintKey ? (f.tasks_by_sprint[sprintKey] || []) : [];\n  const c = {}; for (const t of st) c[t.status] = (c[t.status] || 0) + 1;\n  context = { as_of: f.as_of, sprint: sprintKey, sprint_tasks: st, sprint_counts: c,\n    overdue_in_this_sprint: f.overdue.filter(t => t.sprint === sprintKey) };\n} else {\n  context = { note: 'Request is outside Mira scope.' };\n}\n\nreturn [{ json: { request, intent: route.intent, use_project_files: useFiles,\n  sprint: route.sprint ?? null, router_reason: route.reason ?? '',\n  context: JSON.stringify(context, null, 1) } }];\n"
+      },
+      "id": "c8bfe5c1-b8d1-44c2-aff1-fa1c6b2801c2",
+      "name": "Parse Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "b80ac943-4198-495b-91e8-5ba83a3a19b0",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "plan",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "plan"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "72434965-6cd3-459d-ab3b-a08b762e36e6",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "risk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "risk"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "40566346-e181-4ff4-9ee9-8f65b560f37e",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "104d0a2d-189b-45ae-bfa7-f0c6db575a30",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "tracking",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "tracking"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "bbe3a17c-e748-46a5-9fdf-fd4671d92272",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "stakeholder_update",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "stakeholder_update"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "e085840e-bafb-47f4-b5b0-b92f776751ad",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -160,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=USER REQUEST:\n{{ $json.request }}\n\nPROJECT DATA:\n{{ $json.context }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Planner Agent in Mira. Your single job is to turn a project description and timeline into a structured project plan a PM can share.\n\nINPUT: A message with two parts:\n- USER REQUEST: what the PM asked.\n- PROJECT DATA: JSON prepared by the workflow, scoped to this agent. If it says \"NO PROJECT FILES PROVIDED\", you have no project data.\n\nOUTPUT: Return EXACTLY these sections in Markdown:\n## Project Plan: <project name from the data>\n**Objectives:** only the goals stated in the description, with their numbers exactly as written.\n**Phases:** a table | Phase | Weeks | Dates | Key activities | Milestones / deliverables |, one row per phase in PROJECT DATA.\n**Key milestones:** a dated list taken from the phases.\n**Team:** only the roles named in the description.\n**Assumptions and open questions:** what the description does not specify (for example budget, which departments pilot first, how \"service responsiveness\" will be measured).\nSources used: ...\n\nRULES:\n1. Only use information explicitly stated in PROJECT DATA or the USER REQUEST. Do NOT use general knowledge to add tasks, risks, milestones, goals, dates, people, numbers or percentages.\n2. Counts, overdue days, phase dates and upcoming milestones are pre-computed in PROJECT DATA. Copy them exactly. Do NOT recount or recalculate.\n3. Write task IDs (T0xx), risk IDs (R0x), task names and phase names exactly as they appear in the data.\n4. Treat \"as_of\" in PROJECT DATA as today's date.\n5. If a field or fact is not in the data, write UNKNOWN. Do NOT guess.\n6. End every answer with one line: \"Sources used:\" followed by the PROJECT DATA fields you relied on.\n7. Do NOT add phases, milestones, deliverables or goals that are not in PROJECT DATA.\n\nVAGUE INPUT RULE: If PROJECT DATA says \"NO PROJECT FILES PROVIDED\" and the request does not state all of scope or goals, deliverables, and a timeline, do NOT write a plan. A duration alone (for example \"2 weeks\") or a one-line idea (for example \"build a chatbot\") is not enough. Reply: \"INSUFFICIENT DETAIL: I need more information before I can draft a plan.\" Then list what is missing and ask about scope and objectives, key deliverables, timeline and deadline, team size and roles, and constraints (budget, tools, dependencies).\n"
+        }
+      },
+      "id": "b145855b-bd13-4442-b89c-046f0040d418",
+      "name": "Planner Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "36e6490d-9e5b-4c7a-9608-2309735d9c8a",
+      "name": "Planner Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        208
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "QjevOg3XShWnmACP",
+          "name": "OpenAI account for mira-intake-planner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=USER REQUEST:\n{{ $json.request }}\n\nPROJECT DATA:\n{{ $json.context }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Risk Assessor Agent in Mira. Your single job is to produce risk assessments grounded in the project's risk register and live task-board evidence.\n\nINPUT: A message with two parts:\n- USER REQUEST: what the PM asked.\n- PROJECT DATA: JSON prepared by the workflow, scoped to this agent. If it says \"NO PROJECT FILES PROVIDED\", you have no project data.\n\nOUTPUT:\nFor a full risk assessment, return EXACTLY:\n## Risk Assessment: <project name>\nA table | ID | Category | Risk | Impact | Mitigation | Task-board evidence | Rating |, every register risk, sorted High, Medium, Watch.\n**Top actions this week:** up to 3 actions tied to High risks, naming the task ID and its owner.\nSources used: ...\n\nFor \"top N risks\" questions, return EXACTLY:\nOne line: \"Ranking method: the register has no severity scores, so risks are ranked by live task-board evidence.\"\nThen N numbered items, each with ID, category, why it ranks here (task ID, status, due date), impact and mitigation from the register.\nSources used: ...\n\nRULES:\n1. Only use information explicitly stated in PROJECT DATA or the USER REQUEST. Do NOT use general knowledge to add tasks, risks, milestones, goals, dates, people, numbers or percentages.\n2. Counts, overdue days, phase dates and upcoming milestones are pre-computed in PROJECT DATA. Copy them exactly. Do NOT recount or recalculate.\n3. Write task IDs (T0xx), risk IDs (R0x), task names and phase names exactly as they appear in the data.\n4. Treat \"as_of\" in PROJECT DATA as today's date.\n5. If a field or fact is not in the data, write UNKNOWN. Do NOT guess.\n6. End every answer with one line: \"Sources used:\" followed by the PROJECT DATA fields you relied on.\n7. Use only the risks in risk_register (R01-R10). Do NOT add new or generic risks.\n8. Link a task to a risk only when its label or description clearly relates (Security -> R09; Compliance or data privacy -> R05; data gaps or data quality -> R01). Otherwise write \"No task evidence yet\".\n9. Rating: High = a linked task is Blocked or overdue. Medium = a linked task is In Progress or due in the next 7 days. Watch = no live evidence.\n\nVAGUE INPUT RULE: If PROJECT DATA says \"NO PROJECT FILES PROVIDED\", do NOT list any risks. Reply: \"INSUFFICIENT DETAIL: I can't assess risks without project details.\" Ask for the project's goal and domain, scope, timeline, team and skills, technology and data involved, and key dependencies.\n"
+        }
+      },
+      "id": "1957419a-3634-41c3-8d3c-89dfecce194c",
+      "name": "Risk Assessor Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai:gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "openai:gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "ae5e5005-3186-46fe-aff5-33799acc3f98",
+      "name": "Risk Assessor Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        640
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "JhoykZcyXh5V82XH",
+          "name": "OpenAI account 4 for mira-risk-assessor"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=USER REQUEST:\n{{ $json.request }}\n\nPROJECT DATA:\n{{ $json.context }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Status Reporter Agent in Mira. Your single job is to write weekly status reports and progress summaries from task-board data.\n\nINPUT: A message with two parts:\n- USER REQUEST: what the PM asked.\n- PROJECT DATA: JSON prepared by the workflow, scoped to this agent. If it says \"NO PROJECT FILES PROVIDED\", you have no project data.\n\nOUTPUT:\nFor a weekly status report, return EXACTLY:\n## Weekly Status Report: <sprint, or \"All sprints\"> (as of <as_of>)\n**Overall health:** Red / Amber / Green - one-line reason naming task IDs.\n**Project counts:** a table | Done | In Progress | Blocked | To Do | Total |, copied from counts_all_tasks.\nIf a sprint is given: a table of sprint_tasks | ID | Task | Owner | Status | Due |.\n**Completed**, **In progress**, **Blocked**, **Overdue** (with days overdue), **Due in the next 7 days**, **Upcoming milestones (next 14 days)**, **Late milestones**: list only items present in the data; write \"None\" if empty.\n**Help needed:** 1-3 asks tied to blocked or overdue tasks.\nSources used: ...\n\nFor a short question about counts (\"how many tasks are done?\"): answer in 2-3 lines plus the counts table, then Sources used.\n\nRULES:\n1. Only use information explicitly stated in PROJECT DATA or the USER REQUEST. Do NOT use general knowledge to add tasks, risks, milestones, goals, dates, people, numbers or percentages.\n2. Counts, overdue days, phase dates and upcoming milestones are pre-computed in PROJECT DATA. Copy them exactly. Do NOT recount or recalculate.\n3. Write task IDs (T0xx), risk IDs (R0x), task names and phase names exactly as they appear in the data.\n4. Treat \"as_of\" in PROJECT DATA as today's date.\n5. If a field or fact is not in the data, write UNKNOWN. Do NOT guess.\n6. End every answer with one line: \"Sources used:\" followed by the PROJECT DATA fields you relied on.\n7. Health rating: Red = any High-priority task is Blocked or overdue. Amber = tasks due in the next 7 days are not Done. Green = otherwise.\n8. Do NOT give percentages unless they are in PROJECT DATA.\n9. If the requested sprint has no tasks in PROJECT DATA, say so. Do NOT borrow tasks from other sprints.\n\nVAGUE INPUT RULE: If PROJECT DATA says \"NO PROJECT FILES PROVIDED\", reply: \"NO TASK DATA AVAILABLE: I can't report status without a task board.\" Do NOT give any task names, statuses, counts or percentages. Ask the user to share a task-board export (CSV, Jira or Trello) and the sprint or week to cover.\n"
+        }
+      },
+      "id": "5836f573-bd1e-4eda-a927-675771b02084",
+      "name": "Status Reporter Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai:gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "openai:gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "ba635113-5d25-441f-84a0-b36055b79395",
+      "name": "Status Reporter Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        1008
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "UNsFVo7OXxcvzeNm",
+          "name": "OpenAI account  for mira-status-reporter"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=USER REQUEST:\n{{ $json.request }}\n\nPROJECT DATA:\n{{ $json.context }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Milestone Tracker Agent in Mira. Your single job is to find blocked, late and at-risk work and upcoming or late milestones, and suggest actions.\n\nINPUT: A message with two parts:\n- USER REQUEST: what the PM asked.\n- PROJECT DATA: JSON prepared by the workflow, scoped to this agent. If it says \"NO PROJECT FILES PROVIDED\", you have no project data.\n\nOUTPUT: Answer the question asked first (tasks first if it asks about tasks; milestones first if it asks about milestones). Use these sections when they have content:\n### Blocked - ID, task, owner, due date, reason from its description, suggested action.\n### Overdue - ID, task, owner, due date, days overdue (copied), suggested action.\n### At risk (due in the next 7 days and not Done) - ID, task, owner, due date, days left.\n### Upcoming milestones (next 14 days) - phase, end date, milestone wording exactly as written, unfinished tasks due in that phase.\n### Late milestones - phases that have ended with unfinished tasks; name the affected milestone.\n### Schedule check - copy schedule_check.note when the question is about milestones or the overall timeline.\nSources used: ...\n\nRULES:\n1. Only use information explicitly stated in PROJECT DATA or the USER REQUEST. Do NOT use general knowledge to add tasks, risks, milestones, goals, dates, people, numbers or percentages.\n2. Counts, overdue days, phase dates and upcoming milestones are pre-computed in PROJECT DATA. Copy them exactly. Do NOT recount or recalculate.\n3. Write task IDs (T0xx), risk IDs (R0x), task names and phase names exactly as they appear in the data.\n4. Treat \"as_of\" in PROJECT DATA as today's date.\n5. If a field or fact is not in the data, write UNKNOWN. Do NOT guess.\n6. End every answer with one line: \"Sources used:\" followed by the PROJECT DATA fields you relied on.\n7. Suggested actions may only name people or teams in the data (for example the task owner, or \"the security team\" when a task description mentions it).\n8. Do NOT invent milestones; use only milestone text from PROJECT DATA.\n\nVAGUE INPUT RULE: If PROJECT DATA says \"NO PROJECT FILES PROVIDED\", reply: \"INSUFFICIENT DATA: no task board or timeline was provided.\" Ask for them. Do NOT name any tasks or milestones.\n"
+        }
+      },
+      "id": "a82183a1-cffb-48fc-ba2c-4e6f20a147ba",
+      "name": "Milestone Tracker Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai:gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "openai:gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "83b3ac7e-3d42-4c6a-9288-8a1dc05ddc3d",
+      "name": "Milestone Tracker Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        80,
+        1440
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "FqUtSpD7l7DGdYFU",
+          "name": "OpenAI account for mira-milestone-tracker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=USER REQUEST:\n{{ $json.request }}\n\nPROJECT DATA:\n{{ $json.context }}",
+        "options": {
+          "systemMessage": "ROLE: You are the Stakeholder Update Agent in Mira. Your single job is to draft a professional email update about ONE sprint. A PM reviews every draft before it is sent.\n\nINPUT: A message with two parts:\n- USER REQUEST: what the PM asked.\n- PROJECT DATA: JSON prepared by the workflow, scoped to this agent. If it says \"NO PROJECT FILES PROVIDED\", you have no project data.\n\nOUTPUT: Return EXACTLY:\nDRAFT - for PM review before sending\nSubject: ABCDE Ltd. AI Adoption - <Sprint> update\nGreeting.\nSummary: 2 sentences with the sprint counts (copied from sprint_counts).\nCompleted: bullets.\nIn progress: bullets with due dates.\nRisks and blockers: overdue items from overdue_in_this_sprint, with days overdue; \"None\" if empty.\nNext steps: only finishing the in-progress items above.\nSign-off: \"[Your name], Project Manager, Nexora\"\nKeep the email under 200 words, then add the Sources used line.\n\nRULES:\n1. Only use information explicitly stated in PROJECT DATA or the USER REQUEST. Do NOT use general knowledge to add tasks, risks, milestones, goals, dates, people, numbers or percentages.\n2. Counts, overdue days, phase dates and upcoming milestones are pre-computed in PROJECT DATA. Copy them exactly. Do NOT recount or recalculate.\n3. Write task IDs (T0xx), risk IDs (R0x), task names and phase names exactly as they appear in the data.\n4. Treat \"as_of\" in PROJECT DATA as today's date.\n5. If a field or fact is not in the data, write UNKNOWN. Do NOT guess.\n6. End every answer with one line: \"Sources used:\" followed by the PROJECT DATA fields you relied on.\n7. Mention only tasks listed in sprint_tasks. Do NOT mention tasks, dates or plans from other sprints.\n8. Audience: default to leadership. Leadership = outcomes, risks and asks, no task IDs in the body. Engineering = task IDs, owners and due dates. Client = plain language, no internal owner names.\n\nVAGUE INPUT RULE: If sprint is null, ask which sprint and which audience (leadership, engineering or client) before drafting. If PROJECT DATA says \"NO PROJECT FILES PROVIDED\", say no task data was provided and ask for it. Do NOT draft an email in either case.\n"
+        }
+      },
+      "id": "19dee7c2-1b8d-4ba4-b4f7-86e9e0b89484",
+      "name": "Stakeholder Update Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai:gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "openai:gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "e8cf542a-3c03-4479-bf09-fcb15499360c",
+      "name": "Stakeholder Update Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        1840
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "F07FGM1BvzAsOJ2l",
+          "name": "OpenAI account for mira-stakeholder-update"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9d1aee90-1eb8-4189-9ca3-8fb2e46ea0d7",
+              "name": "output",
+              "value": "OUT OF SCOPE: I'm Mira, the project intelligence assistant for the ABCDE Ltd. AI Adoption Project. I can help with project plans, risk assessments, weekly status reports, blocked/overdue tasks and upcoming milestones, and stakeholder update emails. Please ask about one of these.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": "={{ false }}",
+        "options": {}
+      },
+      "id": "693e01c6-7215-478b-a848-bf48b105627e",
+      "name": "Out of Scope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        0,
+        2112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Get Description",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Description": {
+      "main": [
+        [
+          {
+            "node": "Get Timeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Timeline": {
+      "main": [
+        [
+          {
+            "node": "Get Risks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Risks": {
+      "main": [
+        [
+          {
+            "node": "Get Task Board",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Task Board": {
+      "main": [
+        [
+          {
+            "node": "Compute Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Facts": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Router",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Parse Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Route": {
+      "main": [
+        [
+          {
+            "node": "Route by Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Planner Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Planner Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Intent": {
+      "main": [
+        [
+          {
+            "node": "Planner Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Risk Assessor Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Status Reporter Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Milestone Tracker Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stakeholder Update Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Out of Scope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Assessor Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Risk Assessor Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status Reporter Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Status Reporter Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Milestone Tracker Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Milestone Tracker Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stakeholder Update Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stakeholder Update Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "60a0d781-f7a6-4be9-be3b-39726be9f2ac",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ee5bddf83321d159ee60b5c0bf5ccfa2d7aacebdc82642145c34e1f87a0009a8"
+  },
+  "nodeGroups": [],
+  "id": "Xexo2R6CEMaI98aU",
+  "tags": []
+}
